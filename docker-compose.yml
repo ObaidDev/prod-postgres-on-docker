@@ -1,0 +1,63 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./postgres/data:/var/lib/postgresql/data
+      - ./postgres/wal-archive:/var/lib/postgresql/wal-archive
+    command: >
+      postgres
+      -c archive_mode=on
+      -c archive_command='test ! -f /var/lib/postgresql/wal-archive/%f && cp %p /var/lib/postgresql/wal-archive/%f'
+      -c max_wal_senders=10
+      -c wal_level=replica
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - pgnet
+
+  pgbackrest:
+    image: percona/percona-pgbackrest:latest
+    container_name: pgbackrest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # AWS Credentials
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      # S3 Configuration
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME}
+      S3_ENDPOINT: ${S3_ENDPOINT:-s3.amazonaws.com}
+      S3_BACKUP_PATH: ${S3_BACKUP_PATH:-/pgbackrest}
+      # Backup Settings
+      BACKUP_RETENTION_FULL: ${BACKUP_RETENTION_FULL:-7}
+      BACKUP_PROCESS_MAX: ${BACKUP_PROCESS_MAX:-4}
+      # PostgreSQL Connection
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER}
+      STANZA_NAME: main
+    volumes:
+      - ./pgbackrest-repo:/var/lib/pgbackrest
+      - ./postgres/data:/var/lib/postgresql/data:ro
+      - ./postgres/wal-archive:/var/lib/postgresql/wal-archive
+      - ./scripts/backup-entrypoint.sh:/backup-entrypoint.sh:ro
+    entrypoint: ["/bin/bash", "/backup-entrypoint.sh"]
+    networks:
+      - pgnet
+
+networks:
+  pgnet:
+    driver: bridge
